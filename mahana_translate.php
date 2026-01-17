@@ -31,19 +31,19 @@ class Mahana_Translate extends Module
         self::PROVIDER_GOOGLE => 'Google Translate API',
     ];
 
-    /** @var array<string, array{label: string}> */
+    /** @var array<string, array{label: string, fields: string[]}> */
     private $domains = [
         'products' => [
             'label' => 'Products',
+            'fields' => ['name', 'description_short', 'description', 'meta_title', 'meta_description'],
         ],
         'categories' => [
             'label' => 'Categories',
+            'fields' => ['name', 'description', 'meta_title', 'meta_description'],
         ],
         'cms_pages' => [
             'label' => 'CMS pages',
-        ],
-        'static_pages' => [
-            'label' => 'Static blocks/pages',
+            'fields' => ['meta_title', 'meta_description', 'content'],
         ],
     ];
 
@@ -372,6 +372,13 @@ class Mahana_Translate extends Module
                             ],
                         ],
                     ],
+                    [
+                        'type' => 'text',
+                        'label' => $this->trans('Batch size', [], 'Modules.Mahanatranslate.Admin'),
+                        'name' => 'batch_size',
+                        'class' => 'fixed-width-xs',
+                        'desc' => $this->trans('Number of items per request (smaller values reduce timeouts).', [], 'Modules.Mahanatranslate.Admin'),
+                    ],
                 ],
                 'submit' => [
                     'title' => $this->trans('Translate now', [], 'Modules.Mahanatranslate.Admin'),
@@ -451,6 +458,7 @@ class Mahana_Translate extends Module
             'source_lang' => Tools::getValue('source_lang', $defaultLang),
             'target_lang[]' => Tools::getValue('target_lang', []),
             'force_translation' => (bool) Tools::getValue('force_translation', false),
+            'batch_size' => (int) Tools::getValue('batch_size', 10),
         ];
 
         $defaultSelection = !Tools::isSubmit('submitMahanaTranslateJob');
@@ -500,11 +508,22 @@ class Mahana_Translate extends Module
     {
         $domainFields = [];
         foreach ($this->domains as $key => $domain) {
+            $fieldLabels = [];
+            foreach ($domain['fields'] as $fieldName) {
+                $fieldLabels[$fieldName] = ucwords(str_replace('_', ' ', $fieldName));
+            }
             $domainFields[] = [
                 'field' => $this->getJobDomainFieldName($key),
                 'key' => $key,
                 'label' => $this->trans($domain['label'], [], 'Modules.Mahanatranslate.Admin'),
+                'fields' => array_values($domain['fields']),
+                'fieldLabels' => $fieldLabels,
             ];
+        }
+
+        $languageLabels = [];
+        foreach (Language::getLanguages(false) as $language) {
+            $languageLabels[(int) $language['id_lang']] = sprintf('%s (%s)', $language['name'], $language['iso_code']);
         }
 
         $ajaxUrl = $this->getLegacyAdminUrl('AdminMahanaTranslate', []);
@@ -512,13 +531,26 @@ class Mahana_Translate extends Module
         $controllerToken = Tools::getAdminTokenLite('AdminMahanaTranslate');
         $i18n = [
             'running' => $this->trans('Translation in progress...', [], 'Modules.Mahanatranslate.Admin'),
+            'preparing' => $this->trans('Preparing translation batches...', [], 'Modules.Mahanatranslate.Admin'),
             'success' => $this->trans('Translation finished.', [], 'Modules.Mahanatranslate.Admin'),
             'error' => $this->trans('Translation failed: %s', [], 'Modules.Mahanatranslate.Admin'),
+            'status' => $this->trans('%s -> %s: %d/%d items', [], 'Modules.Mahanatranslate.Admin'),
+            'overall' => $this->trans('Overall: %d/%d items', [], 'Modules.Mahanatranslate.Admin'),
+            'batch' => $this->trans('Last batch: %d items, %d fields updated', [], 'Modules.Mahanatranslate.Admin'),
+            'empty' => $this->trans('No items found to translate.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_source' => $this->trans('Select a source language.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_target' => $this->trans('Select at least one target language.', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm' => $this->trans('Voulez-vous traduire en: %s ?', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm_force' => $this->trans('Attention: le mode force est active. Cela ecrasera les traductions existantes.', [], 'Modules.Mahanatranslate.Admin'),
             'filter' => $this->trans('Filter target languages...', [], 'Modules.Mahanatranslate.Admin'),
             'no_results' => $this->trans('No languages found.', [], 'Modules.Mahanatranslate.Admin'),
         ];
 
-        return '<script>
+        return '<style>
+            #mahana-translate-job-results .mahana-translate-progress{display:flex;flex-direction:column;gap:6px;}
+            #mahana-translate-job-results .mahana-translate-status{font-weight:600;}
+            #mahana-translate-job-results .mahana-translate-detail{color:#6c757d;font-size:12px;}
+        </style><script>
             document.addEventListener("DOMContentLoaded", function () {
                 var submitButton = document.querySelector(\'button[name="submitMahanaTranslateJob"]\');
                 if (!submitButton) {
@@ -532,14 +564,51 @@ class Mahana_Translate extends Module
                 var targetSelect = form.querySelector(\'select[name="target_lang[]"]\');
                 var resultBox = document.getElementById("mahana-translate-job-results");
                 var domains = ' . json_encode($domainFields) . ';
+                var languageLabels = ' . json_encode($languageLabels) . ';
                 var ajaxUrl = ' . json_encode($ajaxUrl) . ';
                 var ajaxToken = ' . json_encode($ajaxToken) . ';
                 var controllerToken = ' . json_encode($controllerToken) . ';
                 var messages = ' . json_encode($i18n) . ';
+                var domainLabels = {};
+                var domainFieldMap = {};
+                var domainFieldLabels = {};
+                domains.forEach(function (domain) {
+                    domainLabels[domain.key] = domain.label;
+                    domainFieldMap[domain.key] = Array.isArray(domain.fields) ? domain.fields : [];
+                    domainFieldLabels[domain.key] = domain.fieldLabels || {};
+                });
                 var targetTagUi = null;
                 var targetTagInput = null;
                 var targetTagList = null;
                 var targetOptionList = null;
+
+                function formatMessage(template, values) {
+                    if (!template) {
+                        return "";
+                    }
+                    var index = 0;
+                    return template.replace(/%s|%d/g, function () {
+                        var value = values[index++];
+                        return typeof value === "undefined" ? "" : value;
+                    });
+                }
+
+                function postForm(payload) {
+                    return fetch(ajaxUrl, {
+                        method: "POST",
+                        body: payload,
+                        credentials: "same-origin"
+                    }).then(function (response) {
+                        return response.json();
+                    });
+                }
+
+                function getLanguageLabel(langId) {
+                    if (languageLabels && languageLabels[langId]) {
+                        return languageLabels[langId];
+                    }
+                    return "ID " + langId;
+                }
 
                 function refreshTargetTags() {
                     if (!targetSelect || !targetTagUi || !targetTagList || !targetOptionList) {
@@ -657,59 +726,271 @@ class Mahana_Translate extends Module
                     if (!resultBox) {
                         return;
                     }
+
                     var formData = new FormData(form);
-                    var payload = new FormData();
-                    payload.append("ajax", "1");
-                    payload.append("action", "runTranslationJob");
-                    payload.append("token", ajaxToken || controllerToken || "");
-                    payload.append("controller_token", controllerToken || "");
-                    payload.append("source_lang", formData.get("source_lang") || "");
-                    (formData.getAll("target_lang[]") || []).forEach(function (value) {
-                        payload.append("target_lang[]", value);
+                    var sourceLangId = formData.get("source_lang") || "";
+                    var targetLangIds = (formData.getAll("target_lang[]") || []).filter(function (value) {
+                        return value && value !== sourceLangId;
                     });
+                    var selectedDomains = [];
                     domains.forEach(function (domain) {
                         if (formData.get(domain.field)) {
-                            payload.append("domains[]", domain.key);
+                            selectedDomains.push(domain.key);
                         }
                     });
-                    payload.append("force", formData.get("force_translation") === "1" ? 1 : 0);
+                    if (!selectedDomains.length) {
+                        domains.forEach(function (domain) {
+                            selectedDomains.push(domain.key);
+                        });
+                    }
+
+                    if (!sourceLangId) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.innerHTML = messages.error.replace("%s", messages.missing_source || "Missing source language.");
+                        return;
+                    }
+                    if (!targetLangIds.length) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.innerHTML = messages.error.replace("%s", messages.missing_target || "Select at least one target language.");
+                        return;
+                    }
+
+                    var forceValue = formData.get("force_translation") === "1";
+                    var batchSize = parseInt(formData.get("batch_size") || "10", 10);
+                    if (isNaN(batchSize) || batchSize < 1) {
+                        batchSize = 5;
+                    } else if (batchSize > 100) {
+                        batchSize = 100;
+                    }
+                    var targetLabels = targetLangIds.map(function (langId) {
+                        return getLanguageLabel(langId);
+                    });
+                    var confirmText = formatMessage(messages.confirm, [targetLabels.join(", ")]);
+                    if (forceValue && messages.confirm_force) {
+                        confirmText += "\\n" + messages.confirm_force;
+                    }
+                    if (confirmText && !window.confirm(confirmText)) {
+                        return;
+                    }
 
                     submitButton.disabled = true;
                     resultBox.style.display = "";
                     resultBox.className = "alert alert-info";
-                    resultBox.innerHTML = messages.running;
+                    resultBox.innerHTML = "";
 
-                    fetch(ajaxUrl, {
-                        method: "POST",
-                        body: payload,
-                        credentials: "same-origin"
-                    }).then(function (response) {
-                        return response.json();
-                    }).then(function (data) {
+                    var progressWrap = document.createElement("div");
+                    progressWrap.className = "mahana-translate-progress";
+                    var progress = document.createElement("div");
+                    progress.className = "progress";
+                    var progressBar = document.createElement("div");
+                    progressBar.className = "progress-bar";
+                    progressBar.setAttribute("role", "progressbar");
+                    progressBar.style.width = "0%";
+                    progressBar.textContent = "0%";
+                    progress.appendChild(progressBar);
+                    var statusLine = document.createElement("div");
+                    statusLine.className = "mahana-translate-status";
+                    var detailLine = document.createElement("div");
+                    detailLine.className = "mahana-translate-detail";
+                    progressWrap.appendChild(progress);
+                    progressWrap.appendChild(statusLine);
+                    progressWrap.appendChild(detailLine);
+                    resultBox.appendChild(progressWrap);
+
+                    statusLine.textContent = messages.preparing || messages.running;
+                    detailLine.textContent = "";
+
+                    var totalsPayload = new FormData();
+                    totalsPayload.append("ajax", "1");
+                    totalsPayload.append("action", "getTranslationTotals");
+                    totalsPayload.append("token", ajaxToken || controllerToken || "");
+                    totalsPayload.append("controller_token", controllerToken || "");
+                    totalsPayload.append("source_lang", sourceLangId);
+                    selectedDomains.forEach(function (domain) {
+                        totalsPayload.append("domains[]", domain);
+                    });
+
+                    postForm(totalsPayload).then(function (data) {
                         if (!data.success) {
                             throw new Error(data.message || "Unknown error");
                         }
-                        var html = "<p>" + messages.success + "</p>";
-                        if (Array.isArray(data.reports) && data.reports.length) {
-                            html += "<ul>";
-                            data.reports.forEach(function (report) {
-                                var label = "";
-                                for (var i = 0; i < domains.length; i++) {
-                                    if (domains[i].key === report.domain) {
-                                        label = domains[i].label;
-                                        break;
-                                    }
-                                }
-                                html += "<li><strong>" + label + ":</strong> " + report.message + "</li>";
+
+                        var totals = data.totals || {};
+                        var tasks = [];
+                        var overallTotal = 0;
+                        selectedDomains.forEach(function (domain) {
+                            var total = parseInt(totals[domain] || 0, 10);
+                            if (isNaN(total) || total < 0) {
+                                total = 0;
+                            }
+                            var fields = domainFieldMap[domain] || [];
+                            if (!fields.length || total <= 0) {
+                                return;
+                            }
+                            targetLangIds.forEach(function (targetLangId) {
+                                fields.forEach(function (fieldName) {
+                                    tasks.push({
+                                        domain: domain,
+                                        targetLangId: targetLangId,
+                                        field: fieldName,
+                                        fieldLabel: (domainFieldLabels[domain] || {})[fieldName] || fieldName,
+                                        total: total,
+                                        offset: 0,
+                                        translated: 0
+                                    });
+                                    overallTotal += total;
+                                });
                             });
-                            html += "</ul>";
+                        });
+
+                        if (overallTotal <= 0) {
+                            resultBox.className = "alert alert-warning";
+                            resultBox.innerHTML = messages.empty || "No items found to translate.";
+                            submitButton.disabled = false;
+                            return;
                         }
-                        resultBox.className = "alert alert-success";
-                        resultBox.innerHTML = html;
+
+                        var overallProcessed = 0;
+                        var reports = [];
+                        function updateProgress(task, batchProcessed, batchTranslated) {
+                            if (overallProcessed > overallTotal) {
+                                overallProcessed = overallTotal;
+                            }
+                            var percent = overallTotal > 0 ? Math.round((overallProcessed / overallTotal) * 100) : 0;
+                            progressBar.style.width = percent + "%";
+                            progressBar.textContent = percent + "%";
+                            var domainLabel = domainLabels[task.domain] || task.domain;
+                            if (task.fieldLabel) {
+                                domainLabel = domainLabel + " / " + task.fieldLabel;
+                            }
+                            var targetLabel = getLanguageLabel(task.targetLangId);
+                            statusLine.textContent = formatMessage(messages.status, [domainLabel, targetLabel, task.offset, task.total]);
+                            var overallText = formatMessage(messages.overall, [overallProcessed, overallTotal]);
+                            var batchText = formatMessage(messages.batch, [batchProcessed, batchTranslated]);
+                            detailLine.textContent = overallText + " - " + batchText;
+                        }
+
+                        function finishJobs() {
+                            var html = "<p>" + messages.success + "</p>";
+                            if (reports.length) {
+                                var summary = {};
+                                reports.forEach(function (report) {
+                                    var key = report.domain + "|" + report.targetLangId;
+                                    if (!summary[key]) {
+                                        summary[key] = {
+                                            domain: report.domain,
+                                            targetLangId: report.targetLangId,
+                                            total: report.total,
+                                            translated: 0
+                                        };
+                                    }
+                                    if (report.total > summary[key].total) {
+                                        summary[key].total = report.total;
+                                    }
+                                    summary[key].translated += report.translated;
+                                });
+
+                                html += "<ul>";
+                                Object.keys(summary).forEach(function (key) {
+                                    var item = summary[key];
+                                    var domainLabel = domainLabels[item.domain] || item.domain;
+                                    var targetLabel = getLanguageLabel(item.targetLangId);
+                                    html += "<li><strong>" + domainLabel + " (" + targetLabel + "):</strong> "
+                                        + item.total + " items, " + item.translated + " fields updated.</li>";
+                                });
+                                html += "</ul>";
+                            }
+                            resultBox.className = "alert alert-success";
+                            resultBox.innerHTML = html;
+                            submitButton.disabled = false;
+                        }
+
+                        function runNextTask() {
+                            if (!tasks.length) {
+                                finishJobs();
+                                return;
+                            }
+                            var task = tasks[0];
+                            if (task.total <= 0) {
+                                reports.push({
+                                    domain: task.domain,
+                                    targetLangId: task.targetLangId,
+                                    total: 0,
+                                    translated: 0
+                                });
+                                tasks.shift();
+                                runNextTask();
+                                return;
+                            }
+
+                            runBatch(task);
+                        }
+
+                        function runBatch(task) {
+                            var payload = new FormData();
+                            payload.append("ajax", "1");
+                            payload.append("action", "runTranslationBatch");
+                            payload.append("token", ajaxToken || controllerToken || "");
+                            payload.append("controller_token", controllerToken || "");
+                            payload.append("source_lang", sourceLangId);
+                            payload.append("target_lang", task.targetLangId);
+                            payload.append("domain", task.domain);
+                            if (task.field) {
+                                payload.append("fields[]", task.field);
+                            }
+                            payload.append("offset", task.offset);
+                            payload.append("limit", batchSize);
+                            payload.append("force", forceValue ? 1 : 0);
+
+                            postForm(payload).then(function (data) {
+                                if (!data.success) {
+                                    throw new Error(data.message || "Unknown error");
+                                }
+
+                                var processed = parseInt(data.processed || 0, 10);
+                                var translated = parseInt(data.translated || 0, 10);
+                                if (isNaN(processed) || processed < 0) {
+                                    processed = 0;
+                                }
+                                if (isNaN(translated) || translated < 0) {
+                                    translated = 0;
+                                }
+
+                                task.offset += processed;
+                                task.translated += translated;
+                                overallProcessed += processed;
+
+                                updateProgress(task, processed, translated);
+
+                                if (processed === 0 || task.offset >= task.total) {
+                                    reports.push({
+                                        domain: task.domain,
+                                        targetLangId: task.targetLangId,
+                                        total: task.total,
+                                        translated: task.translated
+                                    });
+                                    tasks.shift();
+                                    runNextTask();
+                                    return;
+                                }
+
+                                setTimeout(function () {
+                                    runBatch(task);
+                                }, 0);
+                            }).catch(function (error) {
+                                resultBox.className = "alert alert-danger";
+                                resultBox.innerHTML = messages.error.replace("%s", error.message || error);
+                                submitButton.disabled = false;
+                            });
+                        }
+
+                        updateProgress(tasks[0], 0, 0);
+                        runNextTask();
                     }).catch(function (error) {
                         resultBox.className = "alert alert-danger";
                         resultBox.innerHTML = messages.error.replace("%s", error.message || error);
-                    }).finally(function () {
                         submitButton.disabled = false;
                     });
                 });

@@ -4,6 +4,7 @@ namespace MahanaTranslate\Translation;
 
 use MahanaTranslate\Provider\ProviderException;
 use MahanaTranslate\Provider\TranslationProviderInterface;
+use MahanaTranslate\Translation\BatchTranslatorInterface;
 
 class TranslationManager
 {
@@ -50,6 +51,52 @@ class TranslationManager
         return $reports;
     }
 
+    /**
+     * @param string[] $domains
+     * @param int $sourceLangId
+     *
+     * @return array<string, int>
+     */
+    public function getTotals(array $domains, $sourceLangId)
+    {
+        $totals = [];
+        foreach ($domains as $domain) {
+            $translator = $this->buildTranslator($domain);
+            if ($translator instanceof BatchTranslatorInterface) {
+                $totals[$domain] = (int) $translator->getTotalCount($sourceLangId);
+            } else {
+                $totals[$domain] = 0;
+            }
+        }
+
+        return $totals;
+    }
+
+    /**
+     * @param string $domain
+     * @param int $sourceLangId
+     * @param int $targetLangId
+     * @param bool $force
+     * @param int $offset
+     * @param int $limit
+     *
+     * @return array<string, mixed>
+     */
+    public function translateBatch($domain, $sourceLangId, $targetLangId, $force = false, $offset = 0, $limit = 20, array $fields = [])
+    {
+        $translator = $this->buildTranslator($domain);
+        if (!$translator || !($translator instanceof BatchTranslatorInterface)) {
+            return [
+                'domain' => $domain,
+                'processed' => 0,
+                'translated' => 0,
+                'message' => sprintf('No batch translator available for domain "%s".', $domain),
+            ];
+        }
+
+        return $translator->translateBatch($sourceLangId, $targetLangId, $force, $offset, $limit, $fields);
+    }
+
     private function buildTranslator($domain)
     {
         switch ($domain) {
@@ -59,8 +106,6 @@ class TranslationManager
                 return new CategoryTranslator($this->provider);
             case 'cms_pages':
                 return new CmsPageTranslator($this->provider);
-            case 'static_pages':
-                return new StaticPageTranslator($this->provider);
             default:
                 return null;
         }

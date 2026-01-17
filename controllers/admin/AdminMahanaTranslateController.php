@@ -72,6 +72,94 @@ class AdminMahanaTranslateController extends ModuleAdminController
         ]);
     }
 
+    public function ajaxProcessGetTranslationTotals()
+    {
+        $this->validateToken();
+        if (!$this->module instanceof Mahana_Translate) {
+            $this->jsonError($this->module ? $this->module->l('Module not loaded.', 'AdminMahanaTranslateController') : 'Module not loaded.');
+        }
+
+        $sourceLangId = (int) Tools::getValue('source_lang');
+        $domains = (array) Tools::getValue('domains', []);
+        $availableDomains = $this->module->getDomainKeys();
+        $domains = array_values(array_unique(array_intersect($domains, $availableDomains)));
+        if (empty($domains)) {
+            $domains = $availableDomains;
+        }
+
+        if ($sourceLangId <= 0) {
+            $this->jsonError($this->module->l('Select a source language.', 'AdminMahanaTranslateController'));
+        }
+
+        try {
+            $provider = $this->module->getTranslationProvider();
+            $manager = new TranslationManager($provider);
+            $totals = $manager->getTotals($domains, $sourceLangId);
+        } catch (ProviderException $exception) {
+            $this->jsonError($exception->getMessage());
+        } catch (Exception $exception) {
+            $this->jsonError($exception->getMessage());
+        }
+
+        $this->jsonSuccess([
+            'totals' => $totals,
+        ]);
+    }
+
+    public function ajaxProcessRunTranslationBatch()
+    {
+        $this->validateToken();
+        if (!$this->module instanceof Mahana_Translate) {
+            $this->jsonError($this->module ? $this->module->l('Module not loaded.', 'AdminMahanaTranslateController') : 'Module not loaded.');
+        }
+
+        $sourceLangId = (int) Tools::getValue('source_lang');
+        $targetLangId = (int) Tools::getValue('target_lang');
+        $domain = (string) Tools::getValue('domain');
+        $fields = (array) Tools::getValue('fields', []);
+        $offset = max(0, (int) Tools::getValue('offset', 0));
+        $limit = (int) Tools::getValue('limit', 20);
+        $force = (bool) Tools::getValue('force', false);
+
+        if ($limit <= 0) {
+            $limit = 20;
+        } elseif ($limit > 200) {
+            $limit = 200;
+        }
+
+        $errors = [];
+        if ($sourceLangId <= 0) {
+            $errors[] = $this->module->l('Select a source language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId <= 0) {
+            $errors[] = $this->module->l('Select a target language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId === $sourceLangId) {
+            $errors[] = $this->module->l('Target languages must be different from the source.', 'AdminMahanaTranslateController');
+        }
+
+        $availableDomains = $this->module->getDomainKeys();
+        if (!$domain || !in_array($domain, $availableDomains, true)) {
+            $errors[] = $this->module->l('Select a valid domain.', 'AdminMahanaTranslateController');
+        }
+
+        if (!empty($errors)) {
+            $this->jsonError(implode(' ', $errors));
+        }
+
+        try {
+            $provider = $this->module->getTranslationProvider();
+            $manager = new TranslationManager($provider);
+            $result = $manager->translateBatch($domain, $sourceLangId, $targetLangId, $force, $offset, $limit, $fields);
+        } catch (ProviderException $exception) {
+            $this->jsonError($exception->getMessage());
+        } catch (Exception $exception) {
+            $this->jsonError($exception->getMessage());
+        }
+
+        $this->jsonSuccess($result);
+    }
+
     private function validateToken()
     {
         if (TokenInUrls::isDisabled() || $this->checkToken()) {
