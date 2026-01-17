@@ -70,4 +70,23 @@ abstract class AbstractTranslator implements ContentTranslatorInterface
 
         $this->db->update(bqSQL($table), $data, implode(' AND ', $whereParts));
     }
+
+    protected function shouldTranslate($force, $currentTargetValue, $sourceValue)
+    {
+        if ($force) {
+            return true;
+        }
+
+        $current = trim((string) $currentTargetValue);
+        if ($current === '') {
+            return true;
+        }
+
+        $source = trim((string) $sourceValue);
+        if ($source === '') {
+            return false;
+        }
+
+        return $current === $source;
+    }
 }

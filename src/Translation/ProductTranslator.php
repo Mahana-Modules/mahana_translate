@@ -209,6 +209,106 @@ class ProductTranslator extends AbstractTranslator implements BatchTranslatorInt
         ];
     }
 
+    public function translateProductField($productId, $sourceLangId, $targetLangId, $field, $force = false)
+    {
+        if (!isset($this->fields[$field])) {
+            return [
+                'domain' => 'products',
+                'processed' => 0,
+                'translated' => 0,
+                'message' => 'Unknown product field.',
+            ];
+        }
+
+        $shopIds = $this->getShopIds();
+        if (empty($shopIds)) {
+            return [
+                'domain' => 'products',
+                'processed' => 0,
+                'translated' => 0,
+                'message' => 'No shop context available.',
+            ];
+        }
+
+        if ((int) $targetLangId === (int) $sourceLangId) {
+            return [
+                'domain' => 'products',
+                'processed' => 0,
+                'translated' => 0,
+                'message' => 'Target language matches source.',
+            ];
+        }
+
+        $sourceRows = $this->fetchRows((int) $sourceLangId, $shopIds, null, null, [(int) $productId]);
+        if (empty($sourceRows)) {
+            return [
+                'domain' => 'products',
+                'processed' => 0,
+                'translated' => 0,
+                'message' => 'No product content found for source language.',
+            ];
+        }
+
+        $sourceIso = Language::getIsoById($sourceLangId);
+        $targetIso = Language::getIsoById($targetLangId);
+        $targetRows = $this->fetchRows((int) $targetLangId, $shopIds, null, null, [(int) $productId]);
+        $targetIndex = [];
+        foreach ($targetRows as $row) {
+            $targetIndex[$row['id_product'] . '_' . $row['id_shop']] = $row;
+        }
+
+        $allowHtml = (bool) $this->fields[$field];
+        $texts = [];
+        $indexMap = [];
+
+        foreach ($sourceRows as $row) {
+            $key = $row['id_product'] . '_' . $row['id_shop'];
+            $currentTargetValue = isset($targetIndex[$key]) ? $targetIndex[$key][$field] : '';
+            if (!$force && $currentTargetValue && trim((string) $currentTargetValue) !== '') {
+                continue;
+            }
+            $value = (string) $row[$field];
+            if ($value === '') {
+                continue;
+            }
+
+            $this->ensureLangRow('product_lang', [
+                'id_product' => (int) $row['id_product'],
+                'id_shop' => (int) $row['id_shop'],
+            ], $targetLangId);
+
+            $texts[] = $value;
+            $indexMap[] = [
+                'id_product' => (int) $row['id_product'],
+                'id_shop' => (int) $row['id_shop'],
+            ];
+        }
+
+        if (empty($texts)) {
+            return [
+                'domain' => 'products',
+                'processed' => 0,
+                'translated' => 0,
+                'message' => 'No fields to translate.',
+            ];
+        }
+
+        $translations = $this->provider->translate($texts, $sourceIso, $targetIso);
+        $totalUpdates = 0;
+        foreach ($translations as $i => $translation) {
+            $item = $indexMap[$i];
+            $this->updateLangField('product_lang', $item, $targetLangId, $field, $translation, $allowHtml);
+            $totalUpdates++;
+        }
+
+        return [
+            'domain' => 'products',
+            'processed' => count($texts),
+            'translated' => $totalUpdates,
+            'message' => sprintf('%d product fields updated.', $totalUpdates),
+        ];
+    }
+
     private function fetchRows($langId, array $shopIds, $offset = null, $limit = null, array $productIds = [])
     {
         $sql = new \DbQuery();

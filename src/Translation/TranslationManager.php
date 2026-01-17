@@ -97,6 +97,36 @@ class TranslationManager
         return $translator->translateBatch($sourceLangId, $targetLangId, $force, $offset, $limit, $fields);
     }
 
+    /**
+     * @param int $productId
+     * @param int $sourceLangId
+     * @param int $targetLangId
+     * @param string $field
+     *
+     * @return array<string, mixed>
+     */
+    public function translateProductField($productId, $sourceLangId, $targetLangId, $field, $force = false)
+    {
+        $translator = new ProductTranslator($this->provider);
+
+        return $translator->translateProductField($productId, $sourceLangId, $targetLangId, $field, $force);
+    }
+
+    /**
+     * @param int $categoryId
+     * @param int $sourceLangId
+     * @param int $targetLangId
+     * @param string $field
+     *
+     * @return array<string, mixed>
+     */
+    public function translateCategoryField($categoryId, $sourceLangId, $targetLangId, $field, $force = false)
+    {
+        $translator = new CategoryTranslator($this->provider);
+
+        return $translator->translateCategoryField($categoryId, $sourceLangId, $targetLangId, $field, $force);
+    }
+
     private function buildTranslator($domain)
     {
         switch ($domain) {

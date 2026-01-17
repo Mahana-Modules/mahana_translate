@@ -160,6 +160,100 @@ class AdminMahanaTranslateController extends ModuleAdminController
         $this->jsonSuccess($result);
     }
 
+    public function ajaxProcessRunProductTranslationBatch()
+    {
+        $this->validateToken();
+        if (!$this->module instanceof Mahana_Translate) {
+            $this->jsonError($this->module ? $this->module->l('Module not loaded.', 'AdminMahanaTranslateController') : 'Module not loaded.');
+        }
+
+        $productId = (int) Tools::getValue('id_product');
+        $sourceLangId = (int) Tools::getValue('source_lang');
+        $targetLangId = (int) Tools::getValue('target_lang');
+        $field = (string) Tools::getValue('field');
+        $force = (bool) Tools::getValue('force', false);
+
+        $errors = [];
+        if ($productId <= 0) {
+            $errors[] = $this->module->l('Missing product ID.', 'AdminMahanaTranslateController');
+        }
+        if ($sourceLangId <= 0) {
+            $errors[] = $this->module->l('Select a source language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId <= 0) {
+            $errors[] = $this->module->l('Select a target language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId === $sourceLangId) {
+            $errors[] = $this->module->l('Target languages must be different from the source.', 'AdminMahanaTranslateController');
+        }
+        if ($field === '') {
+            $errors[] = $this->module->l('Missing product field.', 'AdminMahanaTranslateController');
+        }
+
+        if (!empty($errors)) {
+            $this->jsonError(implode(' ', $errors));
+        }
+
+        try {
+            $provider = $this->module->getTranslationProvider();
+            $manager = new TranslationManager($provider);
+            $result = $manager->translateProductField($productId, $sourceLangId, $targetLangId, $field, $force);
+        } catch (ProviderException $exception) {
+            $this->jsonError($exception->getMessage());
+        } catch (Exception $exception) {
+            $this->jsonError($exception->getMessage());
+        }
+
+        $this->jsonSuccess($result);
+    }
+
+    public function ajaxProcessRunCategoryTranslationBatch()
+    {
+        $this->validateToken();
+        if (!$this->module instanceof Mahana_Translate) {
+            $this->jsonError($this->module ? $this->module->l('Module not loaded.', 'AdminMahanaTranslateController') : 'Module not loaded.');
+        }
+
+        $categoryId = (int) Tools::getValue('id_category');
+        $sourceLangId = (int) Tools::getValue('source_lang');
+        $targetLangId = (int) Tools::getValue('target_lang');
+        $field = (string) Tools::getValue('field');
+        $force = (bool) Tools::getValue('force', false);
+
+        $errors = [];
+        if ($categoryId <= 0) {
+            $errors[] = $this->module->l('Missing category ID.', 'AdminMahanaTranslateController');
+        }
+        if ($sourceLangId <= 0) {
+            $errors[] = $this->module->l('Select a source language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId <= 0) {
+            $errors[] = $this->module->l('Select a target language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId === $sourceLangId) {
+            $errors[] = $this->module->l('Target languages must be different from the source.', 'AdminMahanaTranslateController');
+        }
+        if ($field === '') {
+            $errors[] = $this->module->l('Missing category field.', 'AdminMahanaTranslateController');
+        }
+
+        if (!empty($errors)) {
+            $this->jsonError(implode(' ', $errors));
+        }
+
+        try {
+            $provider = $this->module->getTranslationProvider();
+            $manager = new TranslationManager($provider);
+            $result = $manager->translateCategoryField($categoryId, $sourceLangId, $targetLangId, $field, $force);
+        } catch (ProviderException $exception) {
+            $this->jsonError($exception->getMessage());
+        } catch (Exception $exception) {
+            $this->jsonError($exception->getMessage());
+        }
+
+        $this->jsonSuccess($result);
+    }
+
     private function validateToken()
     {
         if (TokenInUrls::isDisabled() || $this->checkToken()) {

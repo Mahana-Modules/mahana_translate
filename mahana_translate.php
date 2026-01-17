@@ -39,7 +39,7 @@ class Mahana_Translate extends Module
         ],
         'categories' => [
             'label' => 'Categories',
-            'fields' => ['name', 'description', 'meta_title', 'meta_description'],
+            'fields' => ['name', 'description', 'additional_description', 'meta_title', 'meta_description'],
         ],
         'cms_pages' => [
             'label' => 'CMS pages',
@@ -71,6 +71,8 @@ class Mahana_Translate extends Module
             && Configuration::updateValue(self::CONFIG_OPENAI_KEY, '')
             && Configuration::updateValue(self::CONFIG_GOOGLE_KEY, '')
             && Configuration::updateValue(self::CONFIG_GOOGLE_PROJECT, '')
+            && $this->registerHook('displayAdminProductsExtra')
+            && $this->registerHook('displayBackOfficeHeader')
             && $this->installTab();
     }
 
@@ -269,6 +271,9 @@ class Mahana_Translate extends Module
             . '</div>'
             . '</div>'
             . '<style>'
+            . '.mahana-translate-tabs .nav-tabs{border-bottom:1px solid #d0d7de;}'
+            . '.mahana-translate-tabs .nav-tabs .nav-link{border:none;border-bottom:2px solid transparent;}'
+            . '.mahana-translate-tabs .nav-tabs .nav-link.active{border-bottom-color:#0077c8;font-weight:600;}'
             . '#mahana-translate-tabs-content .mahana-translate-tab-pane{display:none;}'
             . '#mahana-translate-tabs-content .mahana-translate-tab-pane.active{display:block;}'
             . '</style>'
@@ -540,8 +545,8 @@ class Mahana_Translate extends Module
             'empty' => $this->trans('No items found to translate.', [], 'Modules.Mahanatranslate.Admin'),
             'missing_source' => $this->trans('Select a source language.', [], 'Modules.Mahanatranslate.Admin'),
             'missing_target' => $this->trans('Select at least one target language.', [], 'Modules.Mahanatranslate.Admin'),
-            'confirm' => $this->trans('Voulez-vous traduire en: %s ?', [], 'Modules.Mahanatranslate.Admin'),
-            'confirm_force' => $this->trans('Attention: le mode force est active. Cela ecrasera les traductions existantes.', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm' => $this->trans('Translate into: %s ?', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm_force' => $this->trans('Warning: force mode is enabled. This will overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
             'filter' => $this->trans('Filter target languages...', [], 'Modules.Mahanatranslate.Admin'),
             'no_results' => $this->trans('No languages found.', [], 'Modules.Mahanatranslate.Admin'),
         ];
@@ -1051,6 +1056,651 @@ class Mahana_Translate extends Module
     public function getDomainKeys()
     {
         return array_keys($this->domains);
+    }
+
+    public function hookDisplayAdminProductsExtra($params)
+    {
+        $productId = isset($params['id_product']) ? (int) $params['id_product'] : 0;
+        if ($productId <= 0) {
+            return '';
+        }
+
+        $languages = Language::getLanguages(false);
+        $defaultLang = (int) Configuration::get('PS_LANG_DEFAULT');
+        $ajaxUrl = $this->getLegacyAdminUrl('AdminMahanaTranslate', []);
+        $ajaxToken = Tools::getAdminTokenLite('AdminModules');
+        $controllerToken = Tools::getAdminTokenLite('AdminMahanaTranslate');
+
+        $sourceOptions = '';
+        $targetOptions = '';
+        $languageLabels = [];
+        foreach ($languages as $language) {
+            $langId = (int) $language['id_lang'];
+            $label = sprintf('%s (%s)', $language['name'], $language['iso_code']);
+            $languageLabels[$langId] = $label;
+            $sourceOptions .= sprintf(
+                '<option value="%d"%s>%s</option>',
+                $langId,
+                $langId === $defaultLang ? ' selected="selected"' : '',
+                $label
+            );
+            $targetOptions .= sprintf(
+                '<label class="mahana-target-option"><input type="checkbox" name="mahana_translate_product_target[]" value="%d"%s> %s</label>',
+                $langId,
+                $langId === $defaultLang ? '' : ' checked="checked"',
+                $label
+            );
+        }
+
+        $fields = isset($this->domains['products']['fields']) ? $this->domains['products']['fields'] : [];
+        $fieldLabels = [];
+        foreach ($fields as $fieldName) {
+            $fieldLabels[$fieldName] = ucwords(str_replace('_', ' ', $fieldName));
+        }
+
+        $i18n = [
+            'title' => $this->trans('Translate this product', [], 'Modules.Mahanatranslate.Admin'),
+            'source' => $this->trans('Source language', [], 'Modules.Mahanatranslate.Admin'),
+            'targets' => $this->trans('Target languages', [], 'Modules.Mahanatranslate.Admin'),
+            'force' => $this->trans('Force overwrite', [], 'Modules.Mahanatranslate.Admin'),
+            'force_help' => $this->trans('Overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
+            'cta' => $this->trans('Translate', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm' => $this->trans('Translate this product into: %s ?', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm_force' => $this->trans('Warning: force mode is enabled. This will overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_source' => $this->trans('Select a source language.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_target' => $this->trans('Select at least one target language.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_fields' => $this->trans('No product fields are available for translation.', [], 'Modules.Mahanatranslate.Admin'),
+            'running' => $this->trans('Translation in progress...', [], 'Modules.Mahanatranslate.Admin'),
+            'success' => $this->trans('Product translation finished.', [], 'Modules.Mahanatranslate.Admin'),
+            'error' => $this->trans('Translation failed: %s', [], 'Modules.Mahanatranslate.Admin'),
+            'status' => $this->trans('%s -> %s (%d/%d)', [], 'Modules.Mahanatranslate.Admin'),
+        ];
+
+        $config = [
+            'productId' => $productId,
+            'ajaxUrl' => $ajaxUrl,
+            'token' => $ajaxToken,
+            'controllerToken' => $controllerToken,
+            'defaultLang' => $defaultLang,
+            'fields' => array_values($fields),
+            'fieldLabels' => $fieldLabels,
+            'languages' => $languageLabels,
+            'i18n' => $i18n,
+        ];
+
+        $panelId = 'mahana-translate-product-panel-' . $productId;
+        $resultId = 'mahana-translate-product-result-' . $productId;
+        $buttonId = 'mahana-translate-product-run-' . $productId;
+        $sourceId = 'mahana-translate-product-source-' . $productId;
+
+        return '<div class="panel" id="' . $panelId . '">
+            <h3><i class="icon-language"></i> ' . $i18n['title'] . '</h3>
+            <div class="form-group">
+                <label class="control-label" for="' . $sourceId . '">' . $i18n['source'] . '</label>
+                <select class="form-control fixed-width-xxl" id="' . $sourceId . '" name="mahana_translate_product_source">
+                    ' . $sourceOptions . '
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="control-label">' . $i18n['targets'] . '</label>
+                <div class="mahana-target-list">' . $targetOptions . '</div>
+            </div>
+            <div class="form-group">
+                <label class="mahana-force-option">
+                    <input type="checkbox" name="mahana_translate_product_force" value="1"> ' . $i18n['force'] . '
+                </label>
+                <p class="help-block">' . $i18n['force_help'] . '</p>
+            </div>
+            <button type="button" class="btn btn-primary" id="' . $buttonId . '">' . $i18n['cta'] . '</button>
+            <div id="' . $resultId . '" class="alert" style="display:none;margin-top:12px;"></div>
+        </div>
+        <style>
+            #' . $panelId . ' .mahana-target-list{display:flex;flex-wrap:wrap;gap:8px;}
+            #' . $panelId . ' .mahana-target-option{font-weight:400;}
+            #' . $panelId . ' .mahana-force-option{font-weight:400;}
+            #' . $panelId . ' .mahana-translate-progress{display:flex;flex-direction:column;gap:6px;}
+            #' . $panelId . ' .mahana-translate-status{font-weight:600;}
+            #' . $panelId . ' .mahana-translate-detail{color:#6c757d;font-size:12px;}
+        </style>
+        <script>
+            document.addEventListener("DOMContentLoaded", function () {
+                var config = ' . json_encode($config) . ';
+                var panel = document.getElementById(' . json_encode($panelId) . ');
+                if (!panel) {
+                    return;
+                }
+                var sourceSelect = panel.querySelector(\'select[name="mahana_translate_product_source"]\');
+                var targetCheckboxes = panel.querySelectorAll(\'input[name="mahana_translate_product_target[]"]\');
+                var forceCheckbox = panel.querySelector(\'input[name="mahana_translate_product_force"]\');
+                var button = document.getElementById(' . json_encode($buttonId) . ');
+                var resultBox = document.getElementById(' . json_encode($resultId) . ');
+
+                function formatMessage(template, values) {
+                    if (!template) {
+                        return "";
+                    }
+                    var index = 0;
+                    return template.replace(/%s|%d/g, function () {
+                        var value = values[index++];
+                        return typeof value === "undefined" ? "" : value;
+                    });
+                }
+
+                function syncTargets() {
+                    if (!sourceSelect || !targetCheckboxes) {
+                        return;
+                    }
+                    var sourceValue = sourceSelect.value || "";
+                    Array.prototype.forEach.call(targetCheckboxes, function (checkbox) {
+                        if (checkbox.value === sourceValue) {
+                            checkbox.checked = false;
+                            checkbox.disabled = true;
+                        } else {
+                            checkbox.disabled = false;
+                        }
+                    });
+                }
+
+                function postForm(payload) {
+                    return fetch(config.ajaxUrl, {
+                        method: "POST",
+                        body: payload,
+                        credentials: "same-origin"
+                    }).then(function (response) {
+                        return response.json();
+                    });
+                }
+
+                if (sourceSelect) {
+                    sourceSelect.addEventListener("change", syncTargets);
+                }
+                syncTargets();
+
+                if (!button || !resultBox) {
+                    return;
+                }
+
+                button.addEventListener("click", function () {
+                    var sourceLangId = sourceSelect ? sourceSelect.value : "";
+                    if (!sourceLangId) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.innerHTML = config.i18n.missing_source || "Missing source language.";
+                        return;
+                    }
+
+                    var targetLangIds = [];
+                    Array.prototype.forEach.call(targetCheckboxes, function (checkbox) {
+                        if (checkbox.checked && !checkbox.disabled) {
+                            targetLangIds.push(checkbox.value);
+                        }
+                    });
+                    if (!targetLangIds.length) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.innerHTML = config.i18n.missing_target || "Missing target languages.";
+                        return;
+                    }
+
+                    if (!config.fields || !config.fields.length) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.innerHTML = config.i18n.missing_fields || "Missing product fields.";
+                        return;
+                    }
+
+                    var forceValue = !!(forceCheckbox && forceCheckbox.checked);
+                    var targetLabels = targetLangIds.map(function (langId) {
+                        return config.languages[langId] || ("ID " + langId);
+                    });
+                    var confirmText = formatMessage(config.i18n.confirm, [targetLabels.join(", ")]);
+                    if (forceValue && config.i18n.confirm_force) {
+                        confirmText += "\\n" + config.i18n.confirm_force;
+                    }
+                    if (confirmText && !window.confirm(confirmText)) {
+                        return;
+                    }
+
+                    button.disabled = true;
+                    resultBox.style.display = "";
+                    resultBox.className = "alert alert-info";
+                    resultBox.innerHTML = "";
+
+                    var progressWrap = document.createElement("div");
+                    progressWrap.className = "mahana-translate-progress";
+                    var progress = document.createElement("div");
+                    progress.className = "progress";
+                    var progressBar = document.createElement("div");
+                    progressBar.className = "progress-bar";
+                    progressBar.setAttribute("role", "progressbar");
+                    progressBar.style.width = "0%";
+                    progressBar.textContent = "0%";
+                    progress.appendChild(progressBar);
+                    var statusLine = document.createElement("div");
+                    statusLine.className = "mahana-translate-status";
+                    var detailLine = document.createElement("div");
+                    detailLine.className = "mahana-translate-detail";
+                    progressWrap.appendChild(progress);
+                    progressWrap.appendChild(statusLine);
+                    progressWrap.appendChild(detailLine);
+                    resultBox.appendChild(progressWrap);
+
+                    statusLine.textContent = config.i18n.running || "Translation in progress...";
+                    detailLine.textContent = "";
+
+                    var tasks = [];
+                    config.fields.forEach(function (fieldName) {
+                        targetLangIds.forEach(function (targetLangId) {
+                            tasks.push({
+                                field: fieldName,
+                                fieldLabel: (config.fieldLabels && config.fieldLabels[fieldName]) ? config.fieldLabels[fieldName] : fieldName,
+                                targetLangId: targetLangId
+                            });
+                        });
+                    });
+
+                    var totalTasks = tasks.length;
+                    var completed = 0;
+
+                    function updateProgress(task) {
+                        var percent = totalTasks > 0 ? Math.round((completed / totalTasks) * 100) : 0;
+                        progressBar.style.width = percent + "%";
+                        progressBar.textContent = percent + "%";
+                        var targetLabel = config.languages[task.targetLangId] || ("ID " + task.targetLangId);
+                        statusLine.textContent = formatMessage(config.i18n.status, [task.fieldLabel, targetLabel, completed, totalTasks]);
+                        detailLine.textContent = config.i18n.running || "Translation in progress...";
+                    }
+
+                    function finishSuccess() {
+                        resultBox.className = "alert alert-success";
+                        resultBox.innerHTML = config.i18n.success || "Product translation finished.";
+                        button.disabled = false;
+                    }
+
+                    function runNext() {
+                        if (!tasks.length) {
+                            finishSuccess();
+                            return;
+                        }
+
+                        var task = tasks.shift();
+                        updateProgress(task);
+
+                        var payload = new FormData();
+                        payload.append("ajax", "1");
+                        payload.append("action", "runProductTranslationBatch");
+                        payload.append("token", config.token || config.controllerToken || "");
+                        payload.append("controller_token", config.controllerToken || "");
+                        payload.append("id_product", config.productId);
+                        payload.append("source_lang", sourceLangId);
+                        payload.append("target_lang", task.targetLangId);
+                        payload.append("field", task.field);
+                        payload.append("force", forceValue ? 1 : 0);
+
+                        postForm(payload).then(function (data) {
+                            if (!data.success) {
+                                throw new Error(data.message || "Unknown error");
+                            }
+                            completed += 1;
+                            runNext();
+                        }).catch(function (error) {
+                            resultBox.className = "alert alert-danger";
+                            resultBox.innerHTML = formatMessage(config.i18n.error, [error.message || error]);
+                            button.disabled = false;
+                        });
+                    }
+
+                    runNext();
+                });
+            });
+        </script>';
+    }
+
+    public function hookDisplayBackOfficeHeader()
+    {
+        $uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+        if ($uri === '' || strpos($uri, '/sell/catalog/categories') === false) {
+            return '';
+        }
+
+        $languages = Language::getLanguages(false);
+        $defaultLang = (int) Configuration::get('PS_LANG_DEFAULT');
+        $ajaxUrl = $this->getLegacyAdminUrl('AdminMahanaTranslate', []);
+        $ajaxToken = Tools::getAdminTokenLite('AdminModules');
+        $controllerToken = Tools::getAdminTokenLite('AdminMahanaTranslate');
+
+        $languageLabels = [];
+        foreach ($languages as $language) {
+            $languageLabels[(int) $language['id_lang']] = sprintf('%s (%s)', $language['name'], $language['iso_code']);
+        }
+
+        $fields = isset($this->domains['categories']['fields']) ? $this->domains['categories']['fields'] : [];
+        $fieldLabels = [];
+        foreach ($fields as $fieldName) {
+            $fieldLabels[$fieldName] = ucwords(str_replace('_', ' ', $fieldName));
+        }
+
+        $i18n = [
+            'title' => $this->trans('Translate this category', [], 'Modules.Mahanatranslate.Admin'),
+            'source' => $this->trans('Source language', [], 'Modules.Mahanatranslate.Admin'),
+            'targets' => $this->trans('Target languages', [], 'Modules.Mahanatranslate.Admin'),
+            'force' => $this->trans('Force overwrite', [], 'Modules.Mahanatranslate.Admin'),
+            'force_help' => $this->trans('Overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
+            'cta' => $this->trans('Translate', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_id' => $this->trans('Save the category before translating.', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm' => $this->trans('Translate this category into: %s ?', [], 'Modules.Mahanatranslate.Admin'),
+            'confirm_force' => $this->trans('Warning: force mode is enabled. This will overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_source' => $this->trans('Select a source language.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_target' => $this->trans('Select at least one target language.', [], 'Modules.Mahanatranslate.Admin'),
+            'missing_fields' => $this->trans('No category fields are available for translation.', [], 'Modules.Mahanatranslate.Admin'),
+            'running' => $this->trans('Translation in progress...', [], 'Modules.Mahanatranslate.Admin'),
+            'success' => $this->trans('Category translation finished.', [], 'Modules.Mahanatranslate.Admin'),
+            'error' => $this->trans('Translation failed: %s', [], 'Modules.Mahanatranslate.Admin'),
+            'status' => $this->trans('%s -> %s (%d/%d)', [], 'Modules.Mahanatranslate.Admin'),
+        ];
+
+        $config = [
+            'ajaxUrl' => $ajaxUrl,
+            'token' => $ajaxToken,
+            'controllerToken' => $controllerToken,
+            'defaultLang' => $defaultLang,
+            'fields' => array_values($fields),
+            'fieldLabels' => $fieldLabels,
+            'languages' => $languageLabels,
+            'i18n' => $i18n,
+        ];
+
+        return '<style>
+            .mahana-translate-category-card .mahana-target-list{display:flex;flex-wrap:wrap;gap:8px;}
+            .mahana-translate-category-card .mahana-target-option{font-weight:400;}
+            .mahana-translate-category-card .mahana-force-option{font-weight:400;}
+            .mahana-translate-category-card .mahana-translate-progress{display:flex;flex-direction:column;gap:6px;}
+            .mahana-translate-category-card .mahana-translate-status{font-weight:600;}
+            .mahana-translate-category-card .mahana-translate-detail{color:#6c757d;font-size:12px;}
+        </style><script>
+            document.addEventListener("DOMContentLoaded", function () {
+                if (window.location.pathname.indexOf("/sell/catalog/categories") === -1) {
+                    return;
+                }
+                var config = ' . json_encode($config) . ';
+                var form = document.querySelector("form[data-id]");
+                if (!form) {
+                    return;
+                }
+                if (document.querySelector(".mahana-translate-category-card")) {
+                    return;
+                }
+                var categoryId = parseInt(form.getAttribute("data-id") || "0", 10);
+
+                var card = document.createElement("div");
+                card.className = "card mahana-translate-category-card";
+                var header = document.createElement("h3");
+                header.className = "card-header";
+                header.innerHTML = "<i class=\\"icon-language\\"></i> " + (config.i18n.title || "Translate this category");
+                card.appendChild(header);
+
+                var body = document.createElement("div");
+                body.className = "card-body";
+
+                var sourceGroup = document.createElement("div");
+                sourceGroup.className = "form-group";
+                var sourceLabel = document.createElement("label");
+                sourceLabel.className = "control-label";
+                sourceLabel.textContent = config.i18n.source || "Source language";
+                var sourceSelect = document.createElement("select");
+                sourceSelect.className = "form-control fixed-width-xxl";
+                Object.keys(config.languages || {}).forEach(function (langId) {
+                    var option = document.createElement("option");
+                    option.value = langId;
+                    option.textContent = config.languages[langId];
+                    if (parseInt(langId, 10) === parseInt(config.defaultLang, 10)) {
+                        option.selected = true;
+                    }
+                    sourceSelect.appendChild(option);
+                });
+                sourceGroup.appendChild(sourceLabel);
+                sourceGroup.appendChild(sourceSelect);
+                body.appendChild(sourceGroup);
+
+                var targetsGroup = document.createElement("div");
+                targetsGroup.className = "form-group";
+                var targetsLabel = document.createElement("label");
+                targetsLabel.className = "control-label";
+                targetsLabel.textContent = config.i18n.targets || "Target languages";
+                var targetsList = document.createElement("div");
+                targetsList.className = "mahana-target-list";
+                Object.keys(config.languages || {}).forEach(function (langId) {
+                    var label = document.createElement("label");
+                    label.className = "mahana-target-option";
+                    var checkbox = document.createElement("input");
+                    checkbox.type = "checkbox";
+                    checkbox.value = langId;
+                    checkbox.name = "mahana_translate_category_target[]";
+                    if (parseInt(langId, 10) !== parseInt(config.defaultLang, 10)) {
+                        checkbox.checked = true;
+                    }
+                    label.appendChild(checkbox);
+                    label.appendChild(document.createTextNode(" " + config.languages[langId]));
+                    targetsList.appendChild(label);
+                });
+                targetsGroup.appendChild(targetsLabel);
+                targetsGroup.appendChild(targetsList);
+                body.appendChild(targetsGroup);
+
+                var forceGroup = document.createElement("div");
+                forceGroup.className = "form-group";
+                var forceLabel = document.createElement("label");
+                forceLabel.className = "mahana-force-option";
+                var forceCheckbox = document.createElement("input");
+                forceCheckbox.type = "checkbox";
+                forceCheckbox.value = "1";
+                forceCheckbox.name = "mahana_translate_category_force";
+                forceLabel.appendChild(forceCheckbox);
+                forceLabel.appendChild(document.createTextNode(" " + (config.i18n.force || "Force overwrite")));
+                var forceHelp = document.createElement("p");
+                forceHelp.className = "help-block";
+                forceHelp.textContent = config.i18n.force_help || "Overwrite existing translations.";
+                forceGroup.appendChild(forceLabel);
+                forceGroup.appendChild(forceHelp);
+                body.appendChild(forceGroup);
+
+                card.appendChild(body);
+
+                var footer = document.createElement("div");
+                footer.className = "card-footer";
+                var button = document.createElement("button");
+                button.type = "button";
+                button.className = "btn btn-primary";
+                button.textContent = config.i18n.cta || "Translate";
+                footer.appendChild(button);
+                card.appendChild(footer);
+
+                var resultBox = document.createElement("div");
+                resultBox.className = "alert";
+                resultBox.style.display = "none";
+                resultBox.style.margin = "12px";
+                card.appendChild(resultBox);
+
+                form.parentNode.insertBefore(card, form.nextSibling);
+
+                function formatMessage(template, values) {
+                    if (!template) {
+                        return "";
+                    }
+                    var index = 0;
+                    return template.replace(/%s|%d/g, function () {
+                        var value = values[index++];
+                        return typeof value === "undefined" ? "" : value;
+                    });
+                }
+
+                function syncTargets() {
+                    var sourceValue = sourceSelect.value || "";
+                    var checkboxes = targetsList.querySelectorAll("input[type=\\"checkbox\\"]");
+                    Array.prototype.forEach.call(checkboxes, function (checkbox) {
+                        if (checkbox.value === sourceValue) {
+                            checkbox.checked = false;
+                            checkbox.disabled = true;
+                        } else {
+                            checkbox.disabled = false;
+                        }
+                    });
+                }
+
+                function postForm(payload) {
+                    return fetch(config.ajaxUrl, {
+                        method: "POST",
+                        body: payload,
+                        credentials: "same-origin"
+                    }).then(function (response) {
+                        return response.json();
+                    });
+                }
+
+                sourceSelect.addEventListener("change", syncTargets);
+                syncTargets();
+
+                button.addEventListener("click", function () {
+                    if (!categoryId || categoryId <= 0) {
+                        resultBox.className = "alert alert-warning";
+                        resultBox.style.display = "";
+                        resultBox.textContent = config.i18n.missing_id || "Save the category before translating.";
+                        return;
+                    }
+
+                    var sourceLangId = sourceSelect.value || "";
+                    if (!sourceLangId) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.textContent = config.i18n.missing_source || "Missing source language.";
+                        return;
+                    }
+
+                    var targetLangIds = [];
+                    Array.prototype.forEach.call(targetsList.querySelectorAll("input[type=\\"checkbox\\"]"), function (checkbox) {
+                        if (checkbox.checked && !checkbox.disabled) {
+                            targetLangIds.push(checkbox.value);
+                        }
+                    });
+                    if (!targetLangIds.length) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.textContent = config.i18n.missing_target || "Missing target languages.";
+                        return;
+                    }
+
+                    if (!config.fields || !config.fields.length) {
+                        resultBox.className = "alert alert-danger";
+                        resultBox.style.display = "";
+                        resultBox.textContent = config.i18n.missing_fields || "Missing fields.";
+                        return;
+                    }
+
+                    var forceValue = !!forceCheckbox.checked;
+                    var targetLabels = targetLangIds.map(function (langId) {
+                        return config.languages[langId] || ("ID " + langId);
+                    });
+                    var confirmText = formatMessage(config.i18n.confirm, [targetLabels.join(", ")]);
+                    if (forceValue && config.i18n.confirm_force) {
+                        confirmText += "\\n" + config.i18n.confirm_force;
+                    }
+                    if (confirmText && !window.confirm(confirmText)) {
+                        return;
+                    }
+
+                    button.disabled = true;
+                    resultBox.style.display = "";
+                    resultBox.className = "alert alert-info";
+                    resultBox.innerHTML = "";
+
+                    var progressWrap = document.createElement("div");
+                    progressWrap.className = "mahana-translate-progress";
+                    var progress = document.createElement("div");
+                    progress.className = "progress";
+                    var progressBar = document.createElement("div");
+                    progressBar.className = "progress-bar";
+                    progressBar.setAttribute("role", "progressbar");
+                    progressBar.style.width = "0%";
+                    progressBar.textContent = "0%";
+                    progress.appendChild(progressBar);
+                    var statusLine = document.createElement("div");
+                    statusLine.className = "mahana-translate-status";
+                    var detailLine = document.createElement("div");
+                    detailLine.className = "mahana-translate-detail";
+                    progressWrap.appendChild(progress);
+                    progressWrap.appendChild(statusLine);
+                    progressWrap.appendChild(detailLine);
+                    resultBox.appendChild(progressWrap);
+
+                    statusLine.textContent = config.i18n.running || "Translation in progress...";
+                    detailLine.textContent = "";
+
+                    var tasks = [];
+                    config.fields.forEach(function (fieldName) {
+                        targetLangIds.forEach(function (targetLangId) {
+                            tasks.push({
+                                field: fieldName,
+                                fieldLabel: (config.fieldLabels && config.fieldLabels[fieldName]) ? config.fieldLabels[fieldName] : fieldName,
+                                targetLangId: targetLangId
+                            });
+                        });
+                    });
+
+                    var totalTasks = tasks.length;
+                    var completed = 0;
+
+                    function updateProgress(task) {
+                        var percent = totalTasks > 0 ? Math.round((completed / totalTasks) * 100) : 0;
+                        progressBar.style.width = percent + "%";
+                        progressBar.textContent = percent + "%";
+                        var targetLabel = config.languages[task.targetLangId] || ("ID " + task.targetLangId);
+                        statusLine.textContent = formatMessage(config.i18n.status, [task.fieldLabel, targetLabel, completed, totalTasks]);
+                        detailLine.textContent = config.i18n.running || "Translation in progress...";
+                    }
+
+                    function finishSuccess() {
+                        resultBox.className = "alert alert-success";
+                        resultBox.textContent = config.i18n.success || "Category translation finished.";
+                        button.disabled = false;
+                    }
+
+                    function runNext() {
+                        if (!tasks.length) {
+                            finishSuccess();
+                            return;
+                        }
+
+                        var task = tasks.shift();
+                        updateProgress(task);
+
+                        var payload = new FormData();
+                        payload.append("ajax", "1");
+                        payload.append("action", "runCategoryTranslationBatch");
+                        payload.append("token", config.token || config.controllerToken || "");
+                        payload.append("controller_token", config.controllerToken || "");
+                        payload.append("id_category", categoryId);
+                        payload.append("source_lang", sourceLangId);
+                        payload.append("target_lang", task.targetLangId);
+                        payload.append("field", task.field);
+                        payload.append("force", forceValue ? 1 : 0);
+
+                        postForm(payload).then(function (data) {
+                            if (!data.success) {
+                                throw new Error(data.message || "Unknown error");
+                            }
+                            completed += 1;
+                            runNext();
+                        }).catch(function (error) {
+                            resultBox.className = "alert alert-danger";
+                            resultBox.textContent = formatMessage(config.i18n.error, [error.message || error]);
+                            button.disabled = false;
+                        });
+                    }
+
+                    runNext();
+                });
+            });
+        </script>';
     }
 
     public function ajaxProcessRunTranslationJob()
