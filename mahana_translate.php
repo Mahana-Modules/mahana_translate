@@ -465,7 +465,16 @@ class Mahana_Translate extends Module
 
     private function renderProviderToggleScript()
     {
-        return '<script>
+        return '<style>
+            .mahana-tag-select{border:1px solid #d0d7de;border-radius:4px;padding:8px;background:#fff;}
+            .mahana-tag-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+            .mahana-tag{background:#eef2f6;border:1px solid #cfd6dd;border-radius:12px;padding:4px 10px;font-size:12px;cursor:pointer;}
+            .mahana-tag-input{width:100%;max-width:320px;border:1px solid #cfd6dd;border-radius:4px;padding:6px 8px;}
+            .mahana-tag-options{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+            .mahana-tag-option{border:1px solid #d0d7de;background:#fff;padding:4px 8px;border-radius:12px;font-size:12px;cursor:pointer;}
+            .mahana-tag-option:hover{background:#f3f6f9;}
+            .mahana-tag-empty{color:#6c757d;font-size:12px;padding:4px;}
+        </style><script>
             document.addEventListener("DOMContentLoaded", function () {
                 var providerSelect = document.querySelector(\'select[name="' . pSQL(self::CONFIG_PROVIDER) . '"]\');
                 function toggleProviderFields() {
@@ -505,6 +514,8 @@ class Mahana_Translate extends Module
             'running' => $this->trans('Translation in progress...', [], 'Modules.Mahanatranslate.Admin'),
             'success' => $this->trans('Translation finished.', [], 'Modules.Mahanatranslate.Admin'),
             'error' => $this->trans('Translation failed: %s', [], 'Modules.Mahanatranslate.Admin'),
+            'filter' => $this->trans('Filter target languages...', [], 'Modules.Mahanatranslate.Admin'),
+            'no_results' => $this->trans('No languages found.', [], 'Modules.Mahanatranslate.Admin'),
         ];
 
         return '<script>
@@ -525,6 +536,100 @@ class Mahana_Translate extends Module
                 var ajaxToken = ' . json_encode($ajaxToken) . ';
                 var controllerToken = ' . json_encode($controllerToken) . ';
                 var messages = ' . json_encode($i18n) . ';
+                var targetTagUi = null;
+                var targetTagInput = null;
+                var targetTagList = null;
+                var targetOptionList = null;
+
+                function refreshTargetTags() {
+                    if (!targetSelect || !targetTagUi || !targetTagList || !targetOptionList) {
+                        return;
+                    }
+                    var filter = targetTagInput ? (targetTagInput.value || "").toLowerCase() : "";
+                    while (targetTagList.firstChild) {
+                        targetTagList.removeChild(targetTagList.firstChild);
+                    }
+                    while (targetOptionList.firstChild) {
+                        targetOptionList.removeChild(targetOptionList.firstChild);
+                    }
+                    var hasOptions = false;
+                    Array.prototype.forEach.call(targetSelect.options, function (option) {
+                        var label = option.text || option.label || "";
+                        var value = option.value || "";
+                        var matchesFilter = !filter || label.toLowerCase().indexOf(filter) !== -1;
+
+                        if (option.selected) {
+                            var tag = document.createElement("button");
+                            tag.type = "button";
+                            tag.className = "mahana-tag";
+                            tag.setAttribute("data-value", value);
+                            tag.innerHTML = label + " <span aria-hidden=\"true\">&times;</span>";
+                            tag.addEventListener("click", function () {
+                                option.selected = false;
+                                targetSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                                refreshTargetTags();
+                            });
+                            targetTagList.appendChild(tag);
+                            return;
+                        }
+
+                        if (option.disabled || !matchesFilter) {
+                            return;
+                        }
+
+                        var optButton = document.createElement("button");
+                        optButton.type = "button";
+                        optButton.className = "mahana-tag-option";
+                        optButton.textContent = label;
+                        optButton.setAttribute("data-value", value);
+                        optButton.addEventListener("click", function () {
+                            option.selected = true;
+                            targetSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                            refreshTargetTags();
+                        });
+                        targetOptionList.appendChild(optButton);
+                        hasOptions = true;
+                    });
+
+                    if (!hasOptions) {
+                        var empty = document.createElement("div");
+                        empty.className = "mahana-tag-empty";
+                        empty.textContent = messages.no_results || "No languages found.";
+                        targetOptionList.appendChild(empty);
+                    }
+                }
+
+                function buildTargetTags() {
+                    if (!targetSelect || targetTagUi) {
+                        return;
+                    }
+                    targetTagUi = document.createElement("div");
+                    targetTagUi.className = "mahana-tag-select";
+
+                    targetTagList = document.createElement("div");
+                    targetTagList.className = "mahana-tag-list";
+
+                    targetTagInput = document.createElement("input");
+                    targetTagInput.type = "text";
+                    targetTagInput.className = "mahana-tag-input";
+                    targetTagInput.placeholder = messages.filter || "Filter target languages...";
+
+                    targetOptionList = document.createElement("div");
+                    targetOptionList.className = "mahana-tag-options";
+
+                    targetTagUi.appendChild(targetTagList);
+                    targetTagUi.appendChild(targetTagInput);
+                    targetTagUi.appendChild(targetOptionList);
+
+                    targetSelect.style.display = "none";
+                    targetSelect.setAttribute("aria-hidden", "true");
+                    targetSelect.parentNode.insertBefore(targetTagUi, targetSelect);
+
+                    targetTagInput.addEventListener("input", refreshTargetTags);
+                    targetSelect.addEventListener("change", refreshTargetTags);
+
+                    refreshTargetTags();
+                }
 
                 function syncTargetLanguages() {
                     if (!sourceSelect || !targetSelect) {
@@ -538,11 +643,13 @@ class Mahana_Translate extends Module
                         }
                         option.disabled = shouldDisable;
                     });
+                    refreshTargetTags();
                 }
 
                 if (sourceSelect) {
                     sourceSelect.addEventListener("change", syncTargetLanguages);
                 }
+                buildTargetTags();
                 syncTargetLanguages();
 
                 form.addEventListener("submit", function (event) {
