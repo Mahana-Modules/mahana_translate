@@ -53,6 +53,18 @@ class Mahana_Translate extends Module
             'label' => 'Blog categories',
             'fields' => ['title', 'content_text', 'meta_title', 'meta_description', 'meta_keywords'],
         ],
+        'anmegamenu_menus' => [
+            'label' => 'Mega Menu menus',
+            'fields' => ['title'],
+        ],
+        'anmegamenu_tabs' => [
+            'label' => 'Mega Menu tabs',
+            'fields' => ['title', 'label'],
+        ],
+        'anmegamenu_content' => [
+            'label' => 'Mega Menu content',
+            'fields' => ['title', 'text'],
+        ],
     ];
 
     public function __construct()

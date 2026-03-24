@@ -140,6 +140,12 @@ class TranslationManager
                 return new AnblogPostTranslator($this->provider);
             case 'anblog_categories':
                 return new AnblogCategoryTranslator($this->provider);
+            case 'anmegamenu_menus':
+                return new AnMegaMenuMenuTranslator($this->provider);
+            case 'anmegamenu_tabs':
+                return new AnMegaMenuTabTranslator($this->provider);
+            case 'anmegamenu_content':
+                return new AnMegaMenuContentTranslator($this->provider);
             default:
                 return null;
         }
