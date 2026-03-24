@@ -136,8 +136,26 @@ class TranslationManager
                 return new CategoryTranslator($this->provider);
             case 'cms_pages':
                 return new CmsPageTranslator($this->provider);
+            case 'anblog_posts':
+                return new AnblogPostTranslator($this->provider);
+            case 'anblog_categories':
+                return new AnblogCategoryTranslator($this->provider);
             default:
                 return null;
         }
+    }
+
+    public function translateAnblogPostField($postId, $sourceLangId, $targetLangId, $field, $force = false)
+    {
+        $translator = new AnblogPostTranslator($this->provider);
+
+        return $translator->translateAnblogPostField($postId, $sourceLangId, $targetLangId, $field, $force);
+    }
+
+    public function translateAnblogCategoryField($categoryId, $sourceLangId, $targetLangId, $field, $force = false)
+    {
+        $translator = new AnblogCategoryTranslator($this->provider);
+
+        return $translator->translateAnblogCategoryField($categoryId, $sourceLangId, $targetLangId, $field, $force);
     }
 }

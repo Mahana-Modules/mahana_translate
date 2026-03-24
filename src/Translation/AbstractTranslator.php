@@ -5,6 +5,7 @@ namespace MahanaTranslate\Translation;
 use Context;
 use Db;
 use Shop;
+use Tools;
 use MahanaTranslate\Provider\TranslationProviderInterface;
 
 abstract class AbstractTranslator implements ContentTranslatorInterface
@@ -88,5 +89,23 @@ abstract class AbstractTranslator implements ContentTranslatorInterface
         }
 
         return $current === $source;
+    }
+
+    protected function generateLinkRewrite($value, $fallback = '', $prefix = 'item')
+    {
+        $candidate = trim((string) $value);
+        if ($candidate === '') {
+            $candidate = trim((string) $fallback);
+        }
+
+        $slug = trim((string) Tools::str2url(strip_tags($candidate)));
+        if ($slug === '') {
+            $slug = trim((string) Tools::str2url((string) $fallback));
+        }
+        if ($slug === '') {
+            $slug = $prefix;
+        }
+
+        return $slug;
     }
 }
