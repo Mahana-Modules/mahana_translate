@@ -12,6 +12,7 @@ use MahanaTranslate\Translation\TranslationManager;
 
 class Mahana_Translate extends Module
 {
+    private const MASK_CHAR = '*';
     private const CONFIG_PREFIX = 'MAHANA_TRANSLATE_';
     private const CONFIG_PROVIDER = self::CONFIG_PREFIX . 'PROVIDER';
     private const CONFIG_OPENAI_KEY = self::CONFIG_PREFIX . 'OPENAI_KEY';
@@ -139,6 +140,11 @@ class Mahana_Translate extends Module
         $openAiModel = trim((string) Tools::getValue(self::CONFIG_OPENAI_MODEL));
         $googleKey = trim((string) Tools::getValue(self::CONFIG_GOOGLE_KEY));
         $googleProject = trim((string) Tools::getValue(self::CONFIG_GOOGLE_PROJECT));
+        $storedOpenAiKey = (string) Configuration::get(self::CONFIG_OPENAI_KEY);
+        $storedGoogleKey = (string) Configuration::get(self::CONFIG_GOOGLE_KEY);
+
+        $openAiKey = $this->resolveSecretSubmission($openAiKey, $storedOpenAiKey);
+        $googleKey = $this->resolveSecretSubmission($googleKey, $storedGoogleKey);
 
         if ($provider === self::PROVIDER_OPENAI && $openAiKey === '') {
             $errors[] = $this->trans('OpenAI API key is required to use ChatGPT.', [], 'Modules.Mahanatranslate.Admin');
@@ -183,12 +189,13 @@ class Mahana_Translate extends Module
                         'desc' => $this->trans('Select the API used to translate storefront content.', [], 'Modules.Mahanatranslate.Admin'),
                     ],
                     [
-                        'type' => 'password',
+                        'type' => 'text',
                         'label' => $this->trans('OpenAI API key', [], 'Modules.Mahanatranslate.Admin'),
                         'name' => self::CONFIG_OPENAI_KEY,
-                        'class' => 'fixed-width-xxl',
-                        'desc' => $this->trans('Stored encrypted. Required when ChatGPT is selected.', [], 'Modules.Mahanatranslate.Admin'),
+                        'class' => 'fixed-width-xxl mahana-secret-field',
+                        'desc' => $this->trans('Stored encrypted. Required when ChatGPT is selected. Leave the masked value unchanged to keep the current key.', [], 'Modules.Mahanatranslate.Admin'),
                         'form_group_class' => 'provider-field provider-openai',
+                        'autocomplete' => 'off',
                     ],
                     [
                         'type' => 'text',
@@ -199,12 +206,13 @@ class Mahana_Translate extends Module
                         'form_group_class' => 'provider-field provider-openai',
                     ],
                     [
-                        'type' => 'password',
+                        'type' => 'text',
                         'label' => $this->trans('Google API key', [], 'Modules.Mahanatranslate.Admin'),
                         'name' => self::CONFIG_GOOGLE_KEY,
-                        'class' => 'fixed-width-xxl',
-                        'desc' => $this->trans('Required when Google Translate is selected.', [], 'Modules.Mahanatranslate.Admin'),
+                        'class' => 'fixed-width-xxl mahana-secret-field',
+                        'desc' => $this->trans('Required when Google Translate is selected. Leave the masked value unchanged to keep the current key.', [], 'Modules.Mahanatranslate.Admin'),
                         'form_group_class' => 'provider-field provider-google',
+                        'autocomplete' => 'off',
                     ],
                     [
                         'type' => 'text',
@@ -236,7 +244,7 @@ class Mahana_Translate extends Module
             'fields_value' => $this->getConfigFormValues(),
         ];
 
-        return $helper->generateForm([$fieldsForm]) . $this->renderProviderToggleScript();
+        return $helper->generateForm([$fieldsForm]) . $this->renderProviderToggleScript() . $this->renderSecretFieldScript();
     }
 
     private function renderTabbedContent($settingsForm, $jobForm)
@@ -329,6 +337,32 @@ class Mahana_Translate extends Module
             . '});'
             . '});'
             . '</script>';
+    }
+
+    private function renderSecretFieldScript()
+    {
+        return '<style>
+            .mahana-secret-field{
+                -webkit-text-security: disc;
+            }
+        </style><script>
+            document.addEventListener("DOMContentLoaded", function () {
+                var selectors = [
+                    \'input[name="' . pSQL(self::CONFIG_OPENAI_KEY) . '"]\',
+                    \'input[name="' . pSQL(self::CONFIG_GOOGLE_KEY) . '"]\'
+                ];
+
+                selectors.forEach(function (selector) {
+                    var input = document.querySelector(selector);
+                    if (!input) {
+                        return;
+                    }
+                    input.setAttribute("spellcheck", "false");
+                    input.setAttribute("autocapitalize", "off");
+                    input.setAttribute("autocomplete", "off");
+                });
+            });
+        </script>';
     }
 
     private function renderJobForm()
@@ -467,13 +501,49 @@ class Mahana_Translate extends Module
      */
     private function getConfigFormValues()
     {
+        $storedOpenAiKey = (string) Configuration::get(self::CONFIG_OPENAI_KEY);
+        $storedGoogleKey = (string) Configuration::get(self::CONFIG_GOOGLE_KEY);
+
         return [
             self::CONFIG_PROVIDER => Configuration::get(self::CONFIG_PROVIDER, self::PROVIDER_OPENAI),
-            self::CONFIG_OPENAI_KEY => Tools::getValue(self::CONFIG_OPENAI_KEY, Configuration::get(self::CONFIG_OPENAI_KEY)),
+            self::CONFIG_OPENAI_KEY => Tools::getValue(self::CONFIG_OPENAI_KEY, $this->maskSecret($storedOpenAiKey)),
             self::CONFIG_OPENAI_MODEL => Tools::getValue(self::CONFIG_OPENAI_MODEL, Configuration::get(self::CONFIG_OPENAI_MODEL)),
-            self::CONFIG_GOOGLE_KEY => Tools::getValue(self::CONFIG_GOOGLE_KEY, Configuration::get(self::CONFIG_GOOGLE_KEY)),
+            self::CONFIG_GOOGLE_KEY => Tools::getValue(self::CONFIG_GOOGLE_KEY, $this->maskSecret($storedGoogleKey)),
             self::CONFIG_GOOGLE_PROJECT => Tools::getValue(self::CONFIG_GOOGLE_PROJECT, Configuration::get(self::CONFIG_GOOGLE_PROJECT)),
         ];
+    }
+
+    private function maskSecret($value)
+    {
+        $value = (string) $value;
+        if ($value === '') {
+            return '';
+        }
+
+        $length = strlen($value);
+        if ($length <= 4) {
+            return str_repeat(self::MASK_CHAR, $length);
+        }
+
+        return substr($value, 0, 2)
+            . str_repeat(self::MASK_CHAR, max(4, $length - 4))
+            . substr($value, -2);
+    }
+
+    private function resolveSecretSubmission($submittedValue, $storedValue)
+    {
+        $submittedValue = trim((string) $submittedValue);
+        $storedValue = (string) $storedValue;
+
+        if ($storedValue === '') {
+            return $submittedValue;
+        }
+
+        if ($submittedValue === '' || $submittedValue === $this->maskSecret($storedValue)) {
+            return $storedValue;
+        }
+
+        return $submittedValue;
     }
 
     private function getJobFormValues()
