@@ -1359,8 +1359,398 @@ class Mahana_Translate extends Module
     public function hookDisplayBackOfficeHeader()
     {
         $uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
-        if ($uri === '' || strpos($uri, '/sell/catalog/categories') === false) {
+        if ($uri === '') {
             return '';
+        }
+
+        $output = '';
+
+        if (strpos($uri, '/sell/catalog/products') !== false) {
+            $languages = Language::getLanguages(false);
+            $defaultLang = (int) Configuration::get('PS_LANG_DEFAULT');
+            $ajaxUrl = $this->getLegacyAdminUrl('AdminMahanaTranslate', []);
+            $ajaxToken = Tools::getAdminTokenLite('AdminModules');
+            $controllerToken = Tools::getAdminTokenLite('AdminMahanaTranslate');
+
+            $languageLabels = [];
+            foreach ($languages as $language) {
+                $languageLabels[(int) $language['id_lang']] = sprintf('%s (%s)', $language['name'], $language['iso_code']);
+            }
+
+            $fields = isset($this->domains['products']['fields']) ? $this->domains['products']['fields'] : [];
+            $fieldLabels = [];
+            foreach ($fields as $fieldName) {
+                $fieldLabels[$fieldName] = ucwords(str_replace('_', ' ', $fieldName));
+            }
+
+            $i18n = [
+                'title' => $this->trans('Translate this product', [], 'Modules.Mahanatranslate.Admin'),
+                'source' => $this->trans('Source language', [], 'Modules.Mahanatranslate.Admin'),
+                'targets' => $this->trans('Target languages', [], 'Modules.Mahanatranslate.Admin'),
+                'force' => $this->trans('Force overwrite', [], 'Modules.Mahanatranslate.Admin'),
+                'force_help' => $this->trans('Overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
+                'cta' => $this->trans('Translate', [], 'Modules.Mahanatranslate.Admin'),
+                'missing_id' => $this->trans('Save the product before translating.', [], 'Modules.Mahanatranslate.Admin'),
+                'confirm' => $this->trans('Translate this product into: %s ?', [], 'Modules.Mahanatranslate.Admin'),
+                'confirm_force' => $this->trans('Warning: force mode is enabled. This will overwrite existing translations.', [], 'Modules.Mahanatranslate.Admin'),
+                'missing_source' => $this->trans('Select a source language.', [], 'Modules.Mahanatranslate.Admin'),
+                'missing_target' => $this->trans('Select at least one target language.', [], 'Modules.Mahanatranslate.Admin'),
+                'missing_fields' => $this->trans('No product fields are available for translation.', [], 'Modules.Mahanatranslate.Admin'),
+                'running' => $this->trans('Translation in progress...', [], 'Modules.Mahanatranslate.Admin'),
+                'success' => $this->trans('Product translation finished.', [], 'Modules.Mahanatranslate.Admin'),
+                'error' => $this->trans('Translation failed: %s', [], 'Modules.Mahanatranslate.Admin'),
+                'status' => $this->trans('%s -> %s (%d/%d)', [], 'Modules.Mahanatranslate.Admin'),
+            ];
+
+            $config = [
+                'ajaxUrl' => $ajaxUrl,
+                'token' => $ajaxToken,
+                'controllerToken' => $controllerToken,
+                'defaultLang' => $defaultLang,
+                'fields' => array_values($fields),
+                'fieldLabels' => $fieldLabels,
+                'languages' => $languageLabels,
+                'i18n' => $i18n,
+            ];
+
+            $output .= '<style>
+                .mahana-translate-product-card .mahana-target-list{display:flex;flex-wrap:wrap;gap:8px;}
+                .mahana-translate-product-card .mahana-target-option{font-weight:400;}
+                .mahana-translate-product-card .mahana-force-option{font-weight:400;}
+                .mahana-translate-product-card .mahana-translate-progress{display:flex;flex-direction:column;gap:6px;}
+                .mahana-translate-product-card .mahana-translate-status{font-weight:600;}
+                .mahana-translate-product-card .mahana-translate-detail{color:#6c757d;font-size:12px;}
+            </style><script>
+                document.addEventListener("DOMContentLoaded", function () {
+                    if (window.location.pathname.indexOf("/sell/catalog/products") === -1) {
+                        return;
+                    }
+                    if (document.querySelector(".mahana-translate-product-card")) {
+                        return;
+                    }
+
+                    var config = ' . json_encode($config) . ';
+
+                    function getProductId() {
+                        var fromUrl = window.location.pathname.match(/\\/sell\\/catalog\\/products\\/(\\d+)/);
+                        if (fromUrl && fromUrl[1]) {
+                            return parseInt(fromUrl[1], 10) || 0;
+                        }
+
+                        var selectors = [
+                            "[data-product-id]",
+                            "form[data-product-id]",
+                            "input[name=\\"product[id]\\"]",
+                            "input[name=\\"id_product\\"]",
+                            "input[data-product-id]"
+                        ];
+
+                        for (var i = 0; i < selectors.length; i += 1) {
+                            var element = document.querySelector(selectors[i]);
+                            if (!element) {
+                                continue;
+                            }
+                            var candidate = element.getAttribute("data-product-id") || element.value || "";
+                            var parsed = parseInt(candidate, 10);
+                            if (!isNaN(parsed) && parsed > 0) {
+                                return parsed;
+                            }
+                        }
+
+                        return 0;
+                    }
+
+                    function getInsertTarget() {
+                        return document.querySelector("form[data-product-id]")
+                            || document.querySelector("[data-product-id]")
+                            || document.querySelector("main form")
+                            || document.querySelector(".product-page form")
+                            || document.querySelector("form");
+                    }
+
+                    var productId = getProductId();
+                    var target = getInsertTarget();
+                    if (!target || !target.parentNode) {
+                        return;
+                    }
+
+                    var card = document.createElement("div");
+                    card.className = "card mahana-translate-product-card";
+                    var header = document.createElement("h3");
+                    header.className = "card-header";
+                    header.innerHTML = "<i class=\\"icon-language\\"></i> " + (config.i18n.title || "Translate this product");
+                    card.appendChild(header);
+
+                    var body = document.createElement("div");
+                    body.className = "card-body";
+
+                    var sourceGroup = document.createElement("div");
+                    sourceGroup.className = "form-group";
+                    var sourceLabel = document.createElement("label");
+                    sourceLabel.className = "control-label";
+                    sourceLabel.textContent = config.i18n.source || "Source language";
+                    var sourceSelect = document.createElement("select");
+                    sourceSelect.className = "form-control fixed-width-xxl";
+                    Object.keys(config.languages || {}).forEach(function (langId) {
+                        var option = document.createElement("option");
+                        option.value = langId;
+                        option.textContent = config.languages[langId];
+                        if (parseInt(langId, 10) === parseInt(config.defaultLang, 10)) {
+                            option.selected = true;
+                        }
+                        sourceSelect.appendChild(option);
+                    });
+                    sourceGroup.appendChild(sourceLabel);
+                    sourceGroup.appendChild(sourceSelect);
+                    body.appendChild(sourceGroup);
+
+                    var targetsGroup = document.createElement("div");
+                    targetsGroup.className = "form-group";
+                    var targetsLabel = document.createElement("label");
+                    targetsLabel.className = "control-label";
+                    targetsLabel.textContent = config.i18n.targets || "Target languages";
+                    var targetsList = document.createElement("div");
+                    targetsList.className = "mahana-target-list";
+                    Object.keys(config.languages || {}).forEach(function (langId) {
+                        var label = document.createElement("label");
+                        label.className = "mahana-target-option";
+                        var checkbox = document.createElement("input");
+                        checkbox.type = "checkbox";
+                        checkbox.value = langId;
+                        checkbox.name = "mahana_translate_product_target[]";
+                        if (parseInt(langId, 10) !== parseInt(config.defaultLang, 10)) {
+                            checkbox.checked = true;
+                        }
+                        label.appendChild(checkbox);
+                        label.appendChild(document.createTextNode(" " + config.languages[langId]));
+                        targetsList.appendChild(label);
+                    });
+                    targetsGroup.appendChild(targetsLabel);
+                    targetsGroup.appendChild(targetsList);
+                    body.appendChild(targetsGroup);
+
+                    var forceGroup = document.createElement("div");
+                    forceGroup.className = "form-group";
+                    var forceLabel = document.createElement("label");
+                    forceLabel.className = "mahana-force-option";
+                    var forceCheckbox = document.createElement("input");
+                    forceCheckbox.type = "checkbox";
+                    forceCheckbox.value = "1";
+                    forceCheckbox.name = "mahana_translate_product_force";
+                    forceLabel.appendChild(forceCheckbox);
+                    forceLabel.appendChild(document.createTextNode(" " + (config.i18n.force || "Force overwrite")));
+                    var forceHelp = document.createElement("p");
+                    forceHelp.className = "help-block";
+                    forceHelp.textContent = config.i18n.force_help || "Overwrite existing translations.";
+                    forceGroup.appendChild(forceLabel);
+                    forceGroup.appendChild(forceHelp);
+                    body.appendChild(forceGroup);
+
+                    card.appendChild(body);
+
+                    var footer = document.createElement("div");
+                    footer.className = "card-footer";
+                    var button = document.createElement("button");
+                    button.type = "button";
+                    button.className = "btn btn-primary";
+                    button.textContent = config.i18n.cta || "Translate";
+                    footer.appendChild(button);
+                    card.appendChild(footer);
+
+                    var resultBox = document.createElement("div");
+                    resultBox.className = "alert";
+                    resultBox.style.display = "none";
+                    resultBox.style.margin = "12px";
+                    card.appendChild(resultBox);
+
+                    target.parentNode.insertBefore(card, target.nextSibling);
+
+                    function formatMessage(template, values) {
+                        if (!template) {
+                            return "";
+                        }
+                        var index = 0;
+                        return template.replace(/%s|%d/g, function () {
+                            var value = values[index++];
+                            return typeof value === "undefined" ? "" : value;
+                        });
+                    }
+
+                    function syncTargets() {
+                        var sourceValue = sourceSelect.value || "";
+                        var checkboxes = targetsList.querySelectorAll("input[type=\\"checkbox\\"]");
+                        Array.prototype.forEach.call(checkboxes, function (checkbox) {
+                            if (checkbox.value === sourceValue) {
+                                checkbox.checked = false;
+                                checkbox.disabled = true;
+                            } else {
+                                checkbox.disabled = false;
+                            }
+                        });
+                    }
+
+                    function postForm(payload) {
+                        return fetch(config.ajaxUrl, {
+                            method: "POST",
+                            body: payload,
+                            credentials: "same-origin"
+                        }).then(function (response) {
+                            return response.json();
+                        });
+                    }
+
+                    sourceSelect.addEventListener("change", syncTargets);
+                    syncTargets();
+
+                    button.addEventListener("click", function () {
+                        if (!productId || productId <= 0) {
+                            productId = getProductId();
+                        }
+
+                        if (!productId || productId <= 0) {
+                            resultBox.className = "alert alert-warning";
+                            resultBox.style.display = "";
+                            resultBox.textContent = config.i18n.missing_id || "Save the product before translating.";
+                            return;
+                        }
+
+                        var sourceLangId = sourceSelect.value || "";
+                        if (!sourceLangId) {
+                            resultBox.className = "alert alert-danger";
+                            resultBox.style.display = "";
+                            resultBox.textContent = config.i18n.missing_source || "Missing source language.";
+                            return;
+                        }
+
+                        var targetLangIds = [];
+                        Array.prototype.forEach.call(targetsList.querySelectorAll("input[type=\\"checkbox\\"]"), function (checkbox) {
+                            if (checkbox.checked && !checkbox.disabled) {
+                                targetLangIds.push(checkbox.value);
+                            }
+                        });
+                        if (!targetLangIds.length) {
+                            resultBox.className = "alert alert-danger";
+                            resultBox.style.display = "";
+                            resultBox.textContent = config.i18n.missing_target || "Missing target languages.";
+                            return;
+                        }
+
+                        if (!config.fields || !config.fields.length) {
+                            resultBox.className = "alert alert-danger";
+                            resultBox.style.display = "";
+                            resultBox.textContent = config.i18n.missing_fields || "Missing product fields.";
+                            return;
+                        }
+
+                        var forceValue = !!forceCheckbox.checked;
+                        var targetLabels = targetLangIds.map(function (langId) {
+                            return config.languages[langId] || ("ID " + langId);
+                        });
+                        var confirmText = formatMessage(config.i18n.confirm, [targetLabels.join(", ")]);
+                        if (forceValue && config.i18n.confirm_force) {
+                            confirmText += "\\n" + config.i18n.confirm_force;
+                        }
+                        if (confirmText && !window.confirm(confirmText)) {
+                            return;
+                        }
+
+                        button.disabled = true;
+                        resultBox.style.display = "";
+                        resultBox.className = "alert alert-info";
+                        resultBox.innerHTML = "";
+
+                        var progressWrap = document.createElement("div");
+                        progressWrap.className = "mahana-translate-progress";
+                        var progress = document.createElement("div");
+                        progress.className = "progress";
+                        var progressBar = document.createElement("div");
+                        progressBar.className = "progress-bar";
+                        progressBar.setAttribute("role", "progressbar");
+                        progressBar.style.width = "0%";
+                        progressBar.textContent = "0%";
+                        progress.appendChild(progressBar);
+                        var statusLine = document.createElement("div");
+                        statusLine.className = "mahana-translate-status";
+                        var detailLine = document.createElement("div");
+                        detailLine.className = "mahana-translate-detail";
+                        progressWrap.appendChild(progress);
+                        progressWrap.appendChild(statusLine);
+                        progressWrap.appendChild(detailLine);
+                        resultBox.appendChild(progressWrap);
+
+                        statusLine.textContent = config.i18n.running || "Translation in progress...";
+                        detailLine.textContent = "";
+
+                        var tasks = [];
+                        config.fields.forEach(function (fieldName) {
+                            targetLangIds.forEach(function (targetLangId) {
+                                tasks.push({
+                                    field: fieldName,
+                                    fieldLabel: (config.fieldLabels && config.fieldLabels[fieldName]) ? config.fieldLabels[fieldName] : fieldName,
+                                    targetLangId: targetLangId
+                                });
+                            });
+                        });
+
+                        var totalTasks = tasks.length;
+                        var completed = 0;
+
+                        function updateProgress(task) {
+                            var percent = totalTasks > 0 ? Math.round((completed / totalTasks) * 100) : 0;
+                            progressBar.style.width = percent + "%";
+                            progressBar.textContent = percent + "%";
+                            var targetLabel = config.languages[task.targetLangId] || ("ID " + task.targetLangId);
+                            statusLine.textContent = formatMessage(config.i18n.status, [task.fieldLabel, targetLabel, completed, totalTasks]);
+                            detailLine.textContent = config.i18n.running || "Translation in progress...";
+                        }
+
+                        function finishSuccess() {
+                            resultBox.className = "alert alert-success";
+                            resultBox.textContent = config.i18n.success || "Product translation finished.";
+                            button.disabled = false;
+                        }
+
+                        function runNext() {
+                            if (!tasks.length) {
+                                finishSuccess();
+                                return;
+                            }
+
+                            var task = tasks.shift();
+                            updateProgress(task);
+
+                            var payload = new FormData();
+                            payload.append("ajax", "1");
+                            payload.append("action", "runProductTranslationBatch");
+                            payload.append("token", config.token || config.controllerToken || "");
+                            payload.append("controller_token", config.controllerToken || "");
+                            payload.append("id_product", productId);
+                            payload.append("source_lang", sourceLangId);
+                            payload.append("target_lang", task.targetLangId);
+                            payload.append("field", task.field);
+                            payload.append("force", forceValue ? 1 : 0);
+
+                            postForm(payload).then(function (data) {
+                                if (!data.success) {
+                                    throw new Error(data.message || "Unknown error");
+                                }
+                                completed += 1;
+                                runNext();
+                            }).catch(function (error) {
+                                resultBox.className = "alert alert-danger";
+                                resultBox.textContent = formatMessage(config.i18n.error, [error.message || error]);
+                                button.disabled = false;
+                            });
+                        }
+
+                        runNext();
+                    });
+                });
+            </script>';
+        }
+
+        if (strpos($uri, '/sell/catalog/categories') === false) {
+            return $output;
         }
 
         $languages = Language::getLanguages(false);
@@ -1410,7 +1800,7 @@ class Mahana_Translate extends Module
             'i18n' => $i18n,
         ];
 
-        return '<style>
+        $output .= '<style>
             .mahana-translate-category-card .mahana-target-list{display:flex;flex-wrap:wrap;gap:8px;}
             .mahana-translate-category-card .mahana-target-option{font-weight:400;}
             .mahana-translate-category-card .mahana-force-option{font-weight:400;}
@@ -1701,6 +2091,8 @@ class Mahana_Translate extends Module
                 });
             });
         </script>';
+
+        return $output;
     }
 
     public function ajaxProcessRunTranslationJob()
