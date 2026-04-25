@@ -146,6 +146,8 @@ class TranslationManager
                 return new AnMegaMenuTabTranslator($this->provider);
             case 'anmegamenu_content':
                 return new AnMegaMenuContentTranslator($this->provider);
+            case 'an_about_us':
+                return new AnAboutUsTranslator($this->provider);
             default:
                 return null;
         }
@@ -163,5 +165,12 @@ class TranslationManager
         $translator = new AnblogCategoryTranslator($this->provider);
 
         return $translator->translateAnblogCategoryField($categoryId, $sourceLangId, $targetLangId, $field, $force);
+    }
+
+    public function translateAnAboutUsField($sourceLangId, $targetLangId, $field, $force = false)
+    {
+        $translator = new AnAboutUsTranslator($this->provider);
+
+        return $translator->translateAnAboutUsField($sourceLangId, $targetLangId, $field, $force);
     }
 }

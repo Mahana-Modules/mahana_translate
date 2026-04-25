@@ -348,6 +348,49 @@ class AdminMahanaTranslateController extends ModuleAdminController
         $this->jsonSuccess($result);
     }
 
+    public function ajaxProcessRunAnAboutUsTranslationBatch()
+    {
+        $this->validateToken();
+        if (!$this->module instanceof Mahana_Translate) {
+            $this->jsonError($this->module ? $this->module->l('Module not loaded.', 'AdminMahanaTranslateController') : 'Module not loaded.');
+        }
+
+        $sourceLangId = (int) Tools::getValue('source_lang');
+        $targetLangId = (int) Tools::getValue('target_lang');
+        $field = (string) Tools::getValue('field');
+        $force = (bool) Tools::getValue('force', false);
+
+        $errors = [];
+        if ($sourceLangId <= 0) {
+            $errors[] = $this->module->l('Select a source language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId <= 0) {
+            $errors[] = $this->module->l('Select a target language.', 'AdminMahanaTranslateController');
+        }
+        if ($targetLangId === $sourceLangId) {
+            $errors[] = $this->module->l('Target languages must be different from the source.', 'AdminMahanaTranslateController');
+        }
+        if ($field === '') {
+            $errors[] = $this->module->l('Missing About Us field.', 'AdminMahanaTranslateController');
+        }
+
+        if (!empty($errors)) {
+            $this->jsonError(implode(' ', $errors));
+        }
+
+        try {
+            $provider = $this->module->getTranslationProvider();
+            $manager = new TranslationManager($provider);
+            $result = $manager->translateAnAboutUsField($sourceLangId, $targetLangId, $field, $force);
+        } catch (ProviderException $exception) {
+            $this->jsonError($exception->getMessage());
+        } catch (Exception $exception) {
+            $this->jsonError($exception->getMessage());
+        }
+
+        $this->jsonSuccess($result);
+    }
+
     private function validateToken()
     {
         if (TokenInUrls::isDisabled() || $this->checkToken()) {
