@@ -76,7 +76,7 @@ class Mahana_Translate extends Module
     {
         $this->name = 'mahana_translate';
         $this->tab = 'administration';
-        $this->version = '1.1.0';
+        $this->version = '1.1.1';
         $this->author = 'Mahana';
         $this->need_instance = 0;
         $this->bootstrap = true;
